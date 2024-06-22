@@ -20,7 +20,7 @@ public class InvisibilityPlugin : BasePlugin
 
     public override string ModuleName => "InvisibilityPlugin";
     public override string ModuleVersion => "1.0";
-    public override string ModuleAuthor => "Mrec";
+    public override string ModuleAuthor => "Mrec&me";
 
     private const int INVISIBILITY_CHECK_INTERVAL = 8;
     private const float INVISIBILITY_GAIN_PER_SECOND = 0.5f;
