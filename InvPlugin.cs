@@ -43,7 +43,8 @@ public class InvisibilityPlugin : BasePlugin
 
                 var newValue = player.Value < 1.0f ? player.Value + INVISIBILITY_GAIN : 1.0f;
                 playerVisibilityLevels[player.Key] = newValue;
-                SetPlayerVisibilityLevel(player.Key.OriginalController.Value, newValue);
+                if (newValue != player.Value)
+                    SetPlayerVisibilityLevel(player.Key.OriginalController.Value, newValue);
                 UpdateVisibilityBar(player.Key, newValue);
             }
         });
@@ -171,21 +172,16 @@ public class InvisibilityPlugin : BasePlugin
                     weapon.ShadowStrength = visibilityLevel;
                     Utilities.SetStateChanged(weapon, "CBaseModelEntity", "m_clrRender");
 
-                    if (weapon.DesignerName == "weapon_c4")
-                    {
-                        // welcome to my world of failed bomb flickering hacks :3
-                        // if (defaultC4GlowRange == -1)
-                        // {
-                        //     defaultC4GlowRange = weapon.Glow.GlowRange;
-                        //     Server.PrintToChatAll($"C4 Glow values: {weapon.RenderMode}, {weapon.RenderFX}, {weapon.Glow.GlowColor}, {weapon.Glow.GlowColorOverride}, {weapon.Glow.GlowType}");
-                        // }
+                    // if (weapon.DesignerName == "weapon_c4")
+                    // {
+                    //     // Server.PrintToChatAll($"C4 Glow values: {weapon.RenderMode}, {weapon.RenderFX}, {weapon.Glow.GlowColor}, {weapon.Glow.GlowColorOverride}, {weapon.Glow.GlowType}");
 
-                        // // weapon.Glow.GlowColorOverride = fadeColor;
-                        // weapon.RenderMode = visibilityLevel <= 1.0f ? RenderMode_t.kRenderNone : RenderMode_t.kRenderNormal;
-                        // weapon.RenderFX = visibilityLevel <= 1.0f ? RenderFx_t.kRenderFxNone : RenderFx_t.kRenderFxPulseFastWide;
-                        // Utilities.SetStateChanged(weapon, "CBaseModelEntity", "m_nRenderMode");
-                        // Utilities.SetStateChanged(weapon, "CBaseModelEntity", "m_nRenderFX");
-                    }
+                    //     weapon.RenderMode = visibilityLevel <= 1.0f ? RenderMode_t.kRenderNone : RenderMode_t.kRenderNormal;
+                    //     weapon.RenderFX = visibilityLevel <= 1.0f ? RenderFx_t.kRenderFxNone : RenderFx_t.kRenderFxPulseFastWide;
+
+                    //     Utilities.SetStateChanged(weapon, "CBaseModelEntity", "m_nRenderMode");
+                    //     Utilities.SetStateChanged(weapon, "CBaseModelEntity", "m_nRenderFX");
+                    // }
                 }
             }
     }
