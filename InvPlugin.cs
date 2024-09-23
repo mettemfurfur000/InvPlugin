@@ -14,10 +14,21 @@ using System.Reflection;
 using System.Diagnostics.Contracts;
 using CounterStrikeSharp.API.Modules.Utils;
 using System.Runtime.InteropServices;
+using System.Text.Json.Serialization;
+using CounterStrikeSharp.API.Modules.Admin;
 
 namespace InvisibilityPlugin;
 
-public class InvisibilityPlugin : BasePlugin
+public class InvConfig : BasePluginConfig
+{
+    [JsonPropertyName("INVISIBILITY_GAIN_DELAY")] public int INVISIBILITY_GAIN_DELAY { get; set; } = 250;
+    [JsonPropertyName("VISIBILITY_DELAY")] public int VISIBILITY_DELAY { get; set; } = 150;
+    [JsonPropertyName("handlerToggles")] public bool[] handlerToggles { get; set; } = new bool[4];
+    [JsonPropertyName("printDebugMessages")] public bool printDebugMessages { get; set; } = false;
+    [JsonPropertyName("showBar")] public bool showBar { get; set; } = true;
+}
+
+public class InvisibilityPlugin : BasePlugin, IPluginConfig<InvConfig>
 {
     // private Dictionary<CCSPlayerPawn, Timer> playerVisibilityTimers = new Dictionary<CCSPlayerPawn, Timer>();
     private Dictionary<CCSPlayerPawn, float> playerVisibilityLevels = new Dictionary<CCSPlayerPawn, float>();
@@ -26,12 +37,38 @@ public class InvisibilityPlugin : BasePlugin
     public override string ModuleName => "InvisibilityPlugin";
     public override string ModuleVersion => "1.1";
     public override string ModuleAuthor => "Mrec&me";
-    private static float INVISIBILITY_GAIN_PER_SECOND = 0.75f; // fully invisible in 2 seconds
+    private static float INVISIBILITY_GAIN_PER_SECOND = 0.75f;
     private static float INVISIBILITY_GAIN = INVISIBILITY_GAIN_PER_SECOND * (1 / 64.0f);
-    private static float INVISIBILITY_DELAY = 0.0f; // visible for 4 seconds, including fading into invisibility
+    private static float INVISIBILITY_DELAY = 0.0f;
     private static bool[] handlerToggles = new bool[4];
     private static bool printDebugMessages = false;
     private static bool showBar = true;
+
+    public required InvConfig Config { get; set; }
+
+    public void OnConfigParsed(InvConfig config)
+    {
+        INVISIBILITY_GAIN_PER_SECOND = config.INVISIBILITY_GAIN_DELAY != 0 ?
+                                  1000.0f / config.INVISIBILITY_GAIN_DELAY : 1000.0f; ;
+        INVISIBILITY_GAIN = INVISIBILITY_GAIN_PER_SECOND * (1 / 64.0f);
+
+        INVISIBILITY_DELAY = -INVISIBILITY_GAIN_PER_SECOND * (config.VISIBILITY_DELAY / 1000.0f);
+
+        showBar = config.showBar;
+        printDebugMessages = config.printDebugMessages;
+        handlerToggles = config.handlerToggles;
+
+        Config = config;
+    }
+
+    public void smwprint(CCSPlayerController? player, string s)
+    {
+        if (player == null)
+            Console.WriteLine(s);
+        else
+            smwprint(player, s);
+    }
+
 
     private void Debug(string s)
     {
@@ -42,19 +79,29 @@ public class InvisibilityPlugin : BasePlugin
     {
         RegisterListener<OnTick>(() =>
         {
+            // maybe save only vald ones???
             var itemsToRemove = playerVisibilityLevels.Where(f =>
             {
                 if (f.Key == null ||
-                    !f.Key.IsValid ||
+                    f.Key.IsValid == false ||
                     f.Key.OriginalController == null ||
-                    !f.Key.OriginalController.IsValid ||
+                    f.Key.OriginalController.IsValid == false ||
                     f.Key.OriginalController.Value == null // mama mia
-                )
+                 )
                     return true;
                 return false;
             }).ToArray();
-            foreach (var item in itemsToRemove)
-                playerVisibilityLevels.Remove(item.Key);
+            if (itemsToRemove.Length == playerVisibilityLevels.Count && itemsToRemove.Length > 0)
+            {
+                Debug("Invalid items are all invalid, clearing all");
+                playerVisibilityLevels.Clear();
+            }
+            else
+                foreach (var item in itemsToRemove)
+                {
+                    Debug($"Trying to delete invalid player :{item.Key}");
+                    playerVisibilityLevels.Remove(item.Key);
+                }
 
             foreach (var player in playerVisibilityLevels)
             {
@@ -66,8 +113,11 @@ public class InvisibilityPlugin : BasePlugin
                 player.Key.EntitySpottedState.Spotted = false;
 
                 Utilities.SetStateChanged(player.Key, "EntitySpottedState_t", "m_bSpotted");
-                if (newValue != player.Value)
-                    SetPlayerVisibilityLevel(player.Key.OriginalController?.Value!, newValue);
+                //if (newValue != player.Value)
+                if (player.Key.OriginalController.Value != null)
+                {
+                    SetPlayerVisibilityLevel(player.Key.OriginalController.Value, newValue);
+                }
                 if (showBar)
                     UpdateVisibilityBar(player.Key, newValue);
             }
@@ -80,19 +130,26 @@ public class InvisibilityPlugin : BasePlugin
             var ents = Utilities.GetAllEntities();
             foreach (var ent in ents)
             {
-                if (ent.DesignerName.StartsWith("weapon_"))
-                {
-                    var weapon = new CBasePlayerWeapon(ent.Handle);
-                    if (!weapon.IsValid) continue;
-                    CCSWeaponBase _weapon = weapon.As<CCSWeaponBase>();
+                if (!ent.IsValid)
+                    continue;
+                if (!ent.DesignerName.StartsWith("weapon_"))
+                    continue;
 
-                    if (_weapon.Render.A != 255)
-                    {
-                        Debug("Found weapon entity and made it visible");
-                        _weapon.Render = fullColor;
-                        _weapon.ShadowStrength = 1;
-                        Utilities.SetStateChanged(_weapon, "CBaseModelEntity", "m_clrRender");
-                    }
+                var weapon = new CBasePlayerWeapon(ent.Handle);
+                if (!weapon.IsValid) continue;
+                CCSWeaponBase _weapon = weapon.As<CCSWeaponBase>();
+                if (!_weapon.IsValid) continue;
+
+                if (!(_weapon.Render.A != 255))
+                    continue;
+
+                if (_weapon.OwnerEntity.Value == null)
+                {
+                    Debug($"Made {_weapon.DesignerName} back visible");
+
+                    _weapon.Render = fullColor;
+                    _weapon.ShadowStrength = 1;
+                    Utilities.SetStateChanged(_weapon, "CBaseModelEntity", "m_clrRender");
                 }
             }
         });
@@ -136,13 +193,20 @@ public class InvisibilityPlugin : BasePlugin
             return HookResult.Continue;
         });
 
-        for (int i = 0; i < 3; i++)
-            handlerToggles[i] = true;
-
         Console.WriteLine("InvisibilityPlugin loaded.");
 
         if (hotReload == true)
+        {
             Debug("Im here hi!!! just hotreloaded");
+            var players = Utilities.GetPlayers();
+            foreach (var player in players)
+            {
+                if (player != null)
+                {
+                    SetPlayerVisibilityLevel(player, 0.0f);
+                }
+            }
+        }
     }
 
     public override void Unload(bool hotReload)
@@ -150,30 +214,33 @@ public class InvisibilityPlugin : BasePlugin
         Console.WriteLine("InvisibilityPlugin unloaded.");
     }
 
+    [RequiresPermissions(permissions: "@css/root")]
     [ConsoleCommand("invs_help", "help message")]
     [CommandHelper(minArgs: 0, usage: "", whoCanExecute: CommandUsage.CLIENT_AND_SERVER)]
     public void OnHelp(CCSPlayerController? player, CommandInfo info)
     {
-        player.PrintToConsole("invs_help - shows this message");
-        player.PrintToConsole("invs_delay <delay in ms> - sets how long player will be visible after shooting or making sounds");
-        player.PrintToConsole("invs_regain <delay in ms> - controls how long it will take to regain invisibility in milliseconds");
-        player.PrintToConsole("invs <playername> - toggles invisibility for a specific player (dos not have to be an exact copy of the players name)");
-        player.PrintToConsole("invs_types <triggerOnSound> <triggerOnWeaponFire> <triggerOnPlayerHurt> <triggerOnReload> - toggles various invisibility handlers");
-        player.PrintToConsole("invs_debug - triggers plugin to vomit in chat more information than anyone ever needed");
-        player.PrintToConsole("invs_bar - toggle invisibility bar (for now, globally)");
+        smwprint(player, "invs_help - shows this message");
+        smwprint(player, "invs_delay <delay in ms> - sets how long player will be visible after shooting or making sounds");
+        smwprint(player, "invs_regain <delay in ms> - controls how long it will take to regain invisibility in milliseconds");
+        smwprint(player, "invs <playername> - toggles invisibility for a specific player (dos not have to be an exact copy of the players name)");
+        smwprint(player, "invs_types <triggerOnSound> <triggerOnWeaponFire> <triggerOnPlayerHurt> <triggerOnReload> - toggles various invisibility handlers");
+        smwprint(player, "invs_debug - triggers plugin to vomit in chat more information than anyone ever needed");
+        smwprint(player, "invs_bar - toggle invisibility bar (for now, globally)");
     }
 
+    [RequiresPermissions(permissions: "@css/root")]
     [ConsoleCommand("invs_bar", "im insane")]
     [CommandHelper(minArgs: 0, usage: "granyola bar", whoCanExecute: CommandUsage.CLIENT_AND_SERVER)]
     public void OnInvsBar(CCSPlayerController? player, CommandInfo info)
     {
         showBar = !showBar;
         if (showBar)
-            player.PrintToConsole("Bar enabled");
+            smwprint(player, "Bar enabled");
         else
-            player.PrintToConsole("Bad disabled");
+            smwprint(player, "Bad disabled");
     }
 
+    [RequiresPermissions(permissions: "@css/root")]
     [ConsoleCommand("invs_debug", "hi")]
     [CommandHelper(minArgs: 0, usage: "call and look", whoCanExecute: CommandUsage.CLIENT_AND_SERVER)]
     public void OnInvsDebug(CCSPlayerController? player, CommandInfo info)
@@ -185,6 +252,7 @@ public class InvisibilityPlugin : BasePlugin
             Server.PrintToChatAll("bye bye");
     }
 
+    [RequiresPermissions(permissions: "@css/root")]
     [ConsoleCommand("invs_types", "switches various invisibility handlers")]
     [CommandHelper(minArgs: 4, usage: "<triggerOnSound> <triggerOnWeaponFire> <triggerOnPlayerHurt> <triggerOnReload>", whoCanExecute: CommandUsage.CLIENT_AND_SERVER)]
     public void OnInvsTypes(CCSPlayerController? player, CommandInfo info)
@@ -199,25 +267,27 @@ public class InvisibilityPlugin : BasePlugin
             }
             catch (System.Exception)
             {
-                player.PrintToConsole($"expected 1 of 0 at argument {i}, got {info.GetArg(i + 1)}, leaving value unchanged");
+                smwprint(player, $"expected 1 of 0 at argument {i}, got {info.GetArg(i + 1)}, leaving value unchanged");
                 continue;
             }
 
             handlerToggles[i] = imput_num == 1 ? true : imput_num == 0 ? false : handlerToggles[i];
             if (imput_num != 0 && imput_num != 1)
-                player.PrintToConsole($"expected 1 of 0 at argument {i}, got {info.GetArg(i + 1)}, leaving value unchanged");
+                smwprint(player, $"expected 1 of 0 at argument {i}, got {info.GetArg(i + 1)}, leaving value unchanged");
             else
-                player.PrintToConsole($"{handlerNames[i]} is now {handlerToggles[i]}");
+                smwprint(player, $"{handlerNames[i]} is now {handlerToggles[i]}");
         }
     }
 
+    [RequiresPermissions(permissions: "@css/root")]
     [ConsoleCommand("invs_delay", "sets how long player will be visible after shooting or making sounds")]
     [CommandHelper(minArgs: 1, usage: "<delay in ms>", whoCanExecute: CommandUsage.CLIENT_AND_SERVER)]
     public void OnInvsDelay(CCSPlayerController? player, CommandInfo info)
     {
-        INVISIBILITY_DELAY = -(int.Parse(info.GetArg(1)) / 1000.0f) / INVISIBILITY_GAIN_PER_SECOND;
+        INVISIBILITY_DELAY = -INVISIBILITY_GAIN_PER_SECOND / (int.Parse(info.GetArg(1)) / 1000.0f);
     }
 
+    [RequiresPermissions(permissions: "@css/root")]
     [ConsoleCommand("invs_regain", "controls how long it will take to regain invisibility in milliseconds")]
     [CommandHelper(minArgs: 1, usage: "<delay in ms>", whoCanExecute: CommandUsage.CLIENT_AND_SERVER)]
     public void OnInvsRegain(CCSPlayerController? player, CommandInfo info)
@@ -226,6 +296,7 @@ public class InvisibilityPlugin : BasePlugin
         INVISIBILITY_GAIN = INVISIBILITY_GAIN_PER_SECOND * (1 / 64.0f);
     }
 
+    [RequiresPermissions(permissions: "@css/root")]
     [ConsoleCommand("invs", "toggle invisibility for a player.")]
     [CommandHelper(minArgs: 1, usage: "<playername>", whoCanExecute: CommandUsage.CLIENT_AND_SERVER)]
     public void OnInvsCommand(CCSPlayerController? player, CommandInfo info)
@@ -253,7 +324,7 @@ public class InvisibilityPlugin : BasePlugin
 
     private void MakeTemporaryVisible(CCSPlayerController player)
     {
-        if (player == null)
+        if (player == null || player.PlayerPawn.Value == null)
             return;
         if (!playerVisibilityLevels.ContainsKey(player.PlayerPawn.Value))
             return;
@@ -265,12 +336,18 @@ public class InvisibilityPlugin : BasePlugin
     {
         if (playerVisibilityLevels.ContainsKey(player))
         {
-            MakeTemporaryVisible(player.OriginalController.Value); // make forever visible :3
+            if (player.OriginalController.Value != null)
+            {
+                MakeTemporaryVisible(player.OriginalController.Value); // make forever visible :3
+            }
             playerVisibilityLevels.Remove(player);
             return false;
         }
         playerVisibilityLevels[player] = 1.0f; // Fully invisible + added to visibility list
-        SetPlayerVisibilityLevel(player.OriginalController.Value, 1.0f);
+        if (player.OriginalController.Value != null)
+        {
+            SetPlayerVisibilityLevel(player.OriginalController.Value, 1.0f);
+        }
 
         return true;
     }
@@ -290,51 +367,9 @@ public class InvisibilityPlugin : BasePlugin
         var blankColor = Color.FromArgb(0, 255, 255, 255);
         var fullColor = Color.FromArgb(255, 255, 255, 255);
 
-        if (playerPawnValue != null && playerPawnValue.IsValid)
-        {
-            playerPawnValue.Render = fadeColor;
-            Utilities.SetStateChanged(playerPawnValue, "CBaseModelEntity", "m_clrRender");
-            Utilities.SetStateChanged(playerPawnValue, "CCSPlayer_ViewModelServices", "m_hViewModel");
-        }
-
-        // useless
-        // var wearables = playerPawnValue.MyWearables;
-        // if (wearables != null)
-        // {
-        //     Server.PrintToConsole($"There ar some wearables ({wearables.Size})");
-        //     var gloves = wearables[0];
-        //     if (gloves != null)
-        //         if (gloves.Value != null)
-        //         {
-        //             gloves.Value.Render = fadeColor;
-        //             gloves.Value.ShadowStrength = visibilityLevel;
-        //             Server.PrintToConsole("got thoese gloves");
-        //         }
-        //     for (int i = 0; i < wearables.Size; i++)
-        //     {
-        //         if (wearables[i].Value != null)
-        //         {
-        //             // var index = wearables[i].Value.Index;
-        //             // var entity = Utilities.GetEntityFromIndex<CCSWeaponBase>((int)index);
-        //             // entity.Render = fadeColor;
-        //             // entity.ShadowStrength = visibilityLevel;
-        //             wearables[i].Value.Render = fadeColor;
-        //             wearables[i].Value.ShadowStrength = visibilityLevel;
-        //             Server.PrintToChatAll($"{wearables[i].Value.DesignerName}");
-        //         }
-        //     }
-        // }
-        // foreach (var wearable in wearables)
-        // {
-        //     if (wearable.Value != null)
-        //     {
-        //         wearable.Value.Render = fadeColor;
-        //         wearable.Value.ShadowStrength = visibilityLevel;
-        //         Server.PrintToChatAll($"{wearable.Value.DesignerName}");
-        //     }
-        // }
-        // Utilities.SetStateChanged(playerPawnValue, "CBaseModelEntity", "m_hMyWearables");
-        // Utilities.SetStateChanged(playerPawnValue, "CBaseCombatCharacter", "m_hMyWearables");
+        playerPawnValue.Render = fadeColor;
+        Utilities.SetStateChanged(playerPawnValue, "CBaseModelEntity", "m_clrRender");
+        Utilities.SetStateChanged(playerPawnValue, "CCSPlayer_ViewModelServices", "m_hViewModel");
 
         var weaponServices = playerPawnValue.WeaponServices;
         if (weaponServices != null)
@@ -348,7 +383,7 @@ public class InvisibilityPlugin : BasePlugin
             }
         }
 
-        var myWeapons = playerPawnValue.WeaponServices.MyWeapons;
+        var myWeapons = playerPawnValue.WeaponServices?.MyWeapons;
         if (myWeapons != null)
             foreach (var gun in myWeapons)
             {
@@ -397,7 +432,8 @@ public class InvisibilityPlugin : BasePlugin
             visibilityText += line <= visibility_level_in_lines ? "█" : "░";
         visibilityText += "]";
 
-        player.OriginalController.Value.PrintToCenterHtml(visibilityText, 2);
+        if (player.OriginalController.Value != null)
+            player.OriginalController.Value.PrintToCenterHtml(visibilityText, 2);
     }
 
     private CCSPlayerPawn? GetPlayerByName(string playerName)
